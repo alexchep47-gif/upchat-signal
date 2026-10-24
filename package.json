@@ -1,0 +1,9 @@
+{
+  "name": "upchat-signal",
+  "version": "1.0.0",
+  "private": true,
+  "description": "UpChat — serveur de signalisation HTTP (mode internet)",
+  "scripts": {
+    "dev": "vercel dev"
+  }
+}
