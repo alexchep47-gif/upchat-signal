@@ -60,6 +60,14 @@ export function normalizePhone(raw) {
   return hasPlus ? `+${digits}` : digits;
 }
 
+export function allowedOrigins() {
+  return (process.env.UPCHAT_ALLOWED_ORIGINS ||
+      'https://alexchep47-gif.github.io,https://upchat-web.vercel.app,https://upchat-cmr-school.vercel.app')
+    .split(',')
+    .map((origin) => origin.trim().replace(/\/$/, ''))
+    .filter(Boolean);
+}
+
 export function cleanText(value, max = 200) {
   if (typeof value !== 'string') return '';
   return value.trim().replace(/[\u0000-\u001f\u007f]/g, '').slice(0, max);
@@ -132,6 +140,17 @@ export async function lookupPhone(phone) {
   return record ? { userId: record.userId, name: record.name, lastSeen: record.lastSeen } : null;
 }
 
+export async function deviceExists(userId) {
+  if (await ensureSchema()) {
+    const { rowCount } = await pool().query(
+      'SELECT 1 FROM devices WHERE user_id=$1 LIMIT 1',
+      [userId],
+    );
+    return rowCount > 0;
+  }
+  return memory.devices.has(userId);
+}
+
 export async function enqueueMessage({ messageId, targetUserId, senderUserId, envelope }) {
   if (await ensureSchema()) {
     const { rows } = await pool().query(
@@ -144,7 +163,7 @@ export async function enqueueMessage({ messageId, targetUserId, senderUserId, en
   }
   const box = memory.inbox.get(targetUserId) || [];
   if (box.some((item) => item.messageId === messageId)) return { accepted: false, messageId };
-  box.push(envelope); memory.inbox.set(targetUserId, box.slice(-200));
+  box.push({ messageId, envelope }); memory.inbox.set(targetUserId, box.slice(-200));
   return { accepted: true, messageId };
 }
 
@@ -163,26 +182,33 @@ export async function takeInbox(userId, limit = 100) {
       return rows.map((row) => row.envelope);
     } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
   }
-  const messages = (memory.inbox.get(userId) || []).slice(0, limit);
-  memory.inbox.set(userId, (memory.inbox.get(userId) || []).slice(messages.length));
-  return messages;
+  const entries = (memory.inbox.get(userId) || []).slice(0, limit);
+  memory.inbox.set(userId, (memory.inbox.get(userId) || []).slice(entries.length));
+  return entries.map((entry) => entry.envelope);
 }
 
 export function rateLimit(req, key, limit = 60, windowMs = 60_000) {
   const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
   const identity = `${key}:${forwarded || req.socket?.remoteAddress || 'unknown'}`;
   const now = Date.now();
+  if (memory.rate.size > 10_000) {
+    for (const [storedKey, value] of memory.rate) {
+      if (value.reset <= now) memory.rate.delete(storedKey);
+    }
+  }
   const current = memory.rate.get(identity) || { count: 0, reset: now + windowMs };
   if (current.reset <= now) { current.count = 0; current.reset = now + windowMs; }
   current.count += 1; memory.rate.set(identity, current);
   return current.count <= limit;
 }
 
-export function cors(res) {
-  const allowed = (process.env.UPCHAT_ALLOWED_ORIGINS || 'https://alexchep47-gif.github.io,https://upchat-web.vercel.app')
-    .split(',').map((origin) => origin.trim()).filter(Boolean);
+export function cors(req, res) {
+  const allowed = allowedOrigins();
+  const origin = String(req.headers.origin || '').replace(/\/$/, '');
   res.setHeader('Vary', 'Origin');
-  res.setHeader('Access-Control-Allow-Origin', allowed[0] || 'null');
+  if (origin && allowed.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-UpChat-Client');
   res.setHeader('Access-Control-Max-Age', '600');
@@ -190,7 +216,7 @@ export function cors(res) {
 }
 
 export function guard(req, res, key) {
-  cors(res);
+  cors(req, res);
   if (req.method === 'OPTIONS') { res.status(204).end(); return false; }
   if (!rateLimit(req, key)) { res.status(429).json({ error: 'Too many requests' }); return false; }
   const auth = requireDevice(req);
