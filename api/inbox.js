@@ -1,17 +1,14 @@
-import { getStore, cors } from './_store.js';
+import { fail, findDeviceByToken, guard, takeInbox } from './_store.js';
 
-/** Récupère et vide l'inbox d'un utilisateur (poll). */
-export default function handler(req, res) {
-  cors(res);
-  if (req.method === 'OPTIONS') return res.status(204).end();
+export default async function handler(req, res) {
+  const auth = guard(req, res, 'inbox');
+  if (!auth) return;
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
-
-  const userId = req.query?.userId;
-  if (!userId) return res.status(400).json({ error: 'userId required' });
-
-  const store = getStore();
-  const messages = store.inbox.get(userId) || [];
-  store.inbox.set(userId, []);
-
-  return res.status(200).json({ messages });
+  try {
+    const device = await findDeviceByToken(auth.tokenHash);
+    if (!device) return res.status(401).json({ error: 'Unauthorized' });
+    const requested = Number(req.query?.limit || 100);
+    const limit = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 100) : 100;
+    return res.status(200).json({ messages: await takeInbox(device.userId, limit) });
+  } catch (error) { return fail(res, error); }
 }

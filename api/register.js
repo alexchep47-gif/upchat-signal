@@ -1,36 +1,27 @@
-import { getStore, normalizePhone, cors } from './_store.js';
+import { cleanText, cors, fail, hashSecret, normalizePhone, rateLimit, registerDevice, requireDevice } from './_store.js';
 
-export default function handler(req, res) {
+export default async function handler(req, res) {
   cors(res);
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-
-  const { userId, name, phone } = req.body || {};
-  if (!userId || typeof userId !== 'string') {
-    return res.status(400).json({ error: 'userId required' });
-  }
-
-  const store = getStore();
-  const now = new Date().toISOString();
-  const normalized = phone ? normalizePhone(phone) : null;
-
-  // Nettoie ancien mapping téléphone si changé
-  const prev = store.byUser.get(userId);
-  if (prev?.phone && prev.phone !== normalized) {
-    store.byPhone.delete(prev.phone);
-  }
-
-  const record = {
-    userId,
-    name: name || 'Utilisateur',
-    phone: normalized || null,
-    lastSeen: now,
-  };
-
-  store.byUser.set(userId, record);
-  if (normalized) {
-    store.byPhone.set(normalized, record);
-  }
-
-  return res.status(200).json({ ok: true, userId, phone: normalized, lastSeen: now });
+  if (!rateLimit(req, 'register', 10, 60_000)) return res.status(429).json({ error: 'Too many requests' });
+  try {
+    const { userId, name, phone, deviceSecret } = req.body || {};
+    const auth = requireDevice(req);
+    if (!auth || typeof deviceSecret !== 'string' || deviceSecret.length < 32 || auth.tokenHash !== hashSecret(deviceSecret)) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    if (typeof userId !== 'string' || userId.length < 8 || userId.length > 128) {
+      return res.status(400).json({ error: 'Invalid userId' });
+    }
+    const normalized = phone ? normalizePhone(phone) : null;
+    if (phone && !normalized) return res.status(400).json({ error: 'Invalid phone' });
+    const record = await registerDevice({
+      userId,
+      name: cleanText(name || 'Utilisateur', 80) || 'Utilisateur',
+      phone: normalized,
+      tokenHash: auth.tokenHash,
+    });
+    return res.status(200).json({ ok: true, userId: record.userId, lastSeen: record.lastSeen });
+  } catch (error) { return fail(res, error); }
 }

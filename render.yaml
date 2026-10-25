@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: upchat-signal
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: upchat-signal-db
+          property: connectionString
+      - key: UPCHAT_ALLOWED_ORIGINS
+        value: https://alexchep47-gif.github.io,https://upchat-web.vercel.app
+      - key: UPCHAT_ALLOW_MEMORY_STORE
+        value: "false"
+      - key: UPCHAT_REQUIRE_E2EE
+        value: "false"
+      - key: DATABASE_SSL
+        value: "true"
+
+databases:
+  - name: upchat-signal-db
+    plan: free
+    databaseName: upchat_signal
+    user: upchat_signal
