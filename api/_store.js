@@ -62,7 +62,7 @@ export function normalizePhone(raw) {
 
 export function allowedOrigins() {
   return (process.env.UPCHAT_ALLOWED_ORIGINS ||
-      'https://alexchep47-gif.github.io,https://upchat-web.vercel.app,https://upchat-cmr-school.vercel.app')
+      'https://upchat-web-pi.vercel.app,https://upchat-web-cmr-school.vercel.app,https://upchat-web.vercel.app,https://alexchep47-gif.github.io')
     .split(',')
     .map((origin) => origin.trim().replace(/\/$/, ''))
     .filter(Boolean);
