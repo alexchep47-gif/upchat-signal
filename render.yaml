@@ -13,7 +13,7 @@ services:
           name: upchat-signal-db
           property: connectionString
       - key: UPCHAT_ALLOWED_ORIGINS
-        value: https://alexchep47-gif.github.io,https://upchat-web.vercel.app
+        value: https://alexchep47-gif.github.io,https://upchat-web.vercel.app,https://upchat-cmr-school.vercel.app
       - key: UPCHAT_ALLOW_MEMORY_STORE
         value: "false"
       - key: UPCHAT_REQUIRE_E2EE
