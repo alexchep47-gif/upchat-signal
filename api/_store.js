@@ -165,6 +165,22 @@ export async function lookupPhone(phone) {
   return record ? { userId: record.userId, name: record.name, lastSeen: record.lastSeen } : null;
 }
 
+export async function lookupFirebaseUserByPhone(phone) {
+  const firebase = getFirebaseAdmin();
+  if (!firebase) return null;
+  try {
+    const user = await admin.auth(firebase).getUserByPhoneNumber(phone);
+    return {
+      userId: user.uid,
+      name: user.displayName || user.phoneNumber || phone,
+      lastSeen: user.metadata?.lastSignInTime || user.metadata?.creationTime || null,
+    };
+  } catch (error) {
+    if (error?.code === 'auth/user-not-found') return null;
+    throw error;
+  }
+}
+
 export async function deviceExists(userId) {
   if (await ensureSchema()) {
     const { rowCount } = await pool().query(
