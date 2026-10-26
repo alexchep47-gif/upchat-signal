@@ -1,4 +1,4 @@
-import { cors, ensureSchema, fail } from './_store.js';
+import { cors, ensureSchema, fail, firebaseAuthMode } from './_store.js';
 
 export default async function handler(req, res) {
   cors(req, res);
@@ -10,6 +10,7 @@ export default async function handler(req, res) {
       ok: true,
       service: 'upchat-signal',
       storage: process.env.DATABASE_URL ? 'postgres' : 'memory',
+      auth: firebaseAuthMode(),
     });
   } catch (error) {
     return fail(res, error);

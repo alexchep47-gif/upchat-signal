@@ -1,7 +1,7 @@
 import { cleanText, deviceExists, enqueueMessage, fail, findDeviceByToken, guard } from './_store.js';
 
 export default async function handler(req, res) {
-  const auth = guard(req, res, 'message');
+  const auth = await guard(req, res, 'message');
   if (!auth) return;
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   try {

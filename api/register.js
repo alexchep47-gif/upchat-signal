@@ -1,14 +1,16 @@
-import { cleanText, cors, fail, hashSecret, normalizePhone, rateLimit, registerDevice, requireDevice } from './_store.js';
+import { cleanText, cors, fail, hashSecret, normalizePhone, rateLimit, registerDevice, guard } from './_store.js';
 
 export default async function handler(req, res) {
   cors(req, res);
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-  if (!rateLimit(req, 'register', 10, 60_000)) return res.status(429).json({ error: 'Too many requests' });
+  const auth = await guard(req, res, 'register');
+  if (!auth) return;
   try {
     const { userId, name, phone, deviceSecret } = req.body || {};
-    const auth = requireDevice(req);
-    if (!auth || typeof deviceSecret !== 'string' || deviceSecret.length < 32 || auth.tokenHash !== hashSecret(deviceSecret)) {
+    if (auth.firebase) {
+      if (userId !== auth.uid) return res.status(403).json({ error: 'User mismatch' });
+    } else if (typeof deviceSecret !== 'string' || deviceSecret.length < 32 || auth.tokenHash !== hashSecret(deviceSecret)) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     if (typeof userId !== 'string' || userId.length < 8 || userId.length > 128) {

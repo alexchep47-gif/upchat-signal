@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import pg from 'pg';
+import admin from 'firebase-admin';
 
 const { Pool } = pg;
 const memory = globalThis.__upchatMemory || {
@@ -7,6 +8,30 @@ const memory = globalThis.__upchatMemory || {
 };
 globalThis.__upchatMemory = memory;
 globalThis.__upchatPool = globalThis.__upchatPool || null;
+
+let firebaseApp;
+function firebaseAdminEnabled() {
+  return Boolean(process.env.FIREBASE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_APPLICATION_CREDENTIALS);
+}
+function getFirebaseAdmin() {
+  if (!firebaseAdminEnabled()) return null;
+  if (firebaseApp) return firebaseApp;
+  if (admin.apps.length) { firebaseApp = admin.app(); return firebaseApp; }
+  let credential;
+  if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+    credential = admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON));
+  } else {
+    credential = admin.credential.applicationDefault();
+  }
+  firebaseApp = admin.initializeApp({
+    credential,
+    projectId: process.env.FIREBASE_PROJECT_ID || undefined,
+  });
+  return firebaseApp;
+}
+export function firebaseAuthMode() {
+  return firebaseAdminEnabled() ? 'firebase-admin' : 'legacy-device-token';
+}
 let schemaPromise;
 
 export class StorageUnavailable extends Error {}
@@ -215,13 +240,24 @@ export function cors(req, res) {
   res.setHeader('Cache-Control', 'no-store');
 }
 
-export function guard(req, res, key) {
+export async function guard(req, res, key) {
   cors(req, res);
   if (req.method === 'OPTIONS') { res.status(204).end(); return false; }
   if (!rateLimit(req, key)) { res.status(429).json({ error: 'Too many requests' }); return false; }
-  const auth = requireDevice(req);
-  if (!auth) { res.status(401).json({ error: 'Unauthorized' }); return false; }
-  return auth;
+  const token = bearer(req);
+  if (token.length < 32) { res.status(401).json({ error: 'Unauthorized' }); return false; }
+  const firebase = getFirebaseAdmin();
+  if (firebase) {
+    try {
+      const decoded = await admin.auth(firebase).verifyIdToken(token);
+      return { token, tokenHash: hashSecret(token), firebase: true, uid: decoded.uid, claims: decoded };
+    } catch (error) {
+      console.warn('Firebase ID token rejected', error?.code || error?.name || 'Error');
+      res.status(401).json({ error: 'Unauthorized' });
+      return false;
+    }
+  }
+  return { token, tokenHash: hashSecret(token), firebase: false };
 }
 
 export function fail(res, error) {
