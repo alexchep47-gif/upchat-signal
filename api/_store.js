@@ -41,7 +41,6 @@ export class StorageUnavailable extends Error {
   }
 }
 
-/** Log JSON une ligne — lisible dans Render / Vercel. */
 export function log(level, event, fields = {}) {
   const line = JSON.stringify({
     ts: new Date().toISOString(),
@@ -102,13 +101,36 @@ export async function ensureSchema() {
   return true;
 }
 
+/** Canonique : +E.164 quand possible (Cameroun 6XXXXXXXX → +237…). */
 export function normalizePhone(raw) {
   if (!raw || typeof raw !== 'string') return '';
   const trimmed = raw.trim();
-  const hasPlus = trimmed.startsWith('+');
-  const digits = trimmed.replace(/[^0-9]/g, '');
-  if (!digits || digits.length < 7 || digits.length > 15) return '';
-  return hasPlus ? `+${digits}` : digits;
+  let digits = trimmed.replace(/[^0-9]/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('00') && digits.length > 4) digits = digits.slice(2);
+  if (digits.length === 9 && digits.startsWith('6')) return `+237${digits}`;
+  if (digits.length === 12 && digits.startsWith('237')) return `+${digits}`;
+  if (digits.length >= 10 && digits.length <= 15) return `+${digits}`;
+  if (digits.length < 7 || digits.length > 15) return '';
+  return trimmed.startsWith('+') ? `+${digits}` : digits;
+}
+
+/** Variantes pour retrouver un enregistrement saisi différemment. */
+export function phoneCandidates(raw) {
+  const primary = normalizePhone(raw);
+  if (!primary) return [];
+  const digits = primary.replace(/[^0-9]/g, '');
+  const set = new Set([primary, digits, `+${digits}`]);
+  if (digits.startsWith('237') && digits.length >= 12) {
+    const local = digits.slice(3);
+    set.add(local);
+    set.add(`+237${local}`);
+    set.add(`237${local}`);
+  } else if (digits.length === 9 && digits.startsWith('6')) {
+    set.add(`+237${digits}`);
+    set.add(`237${digits}`);
+  }
+  return [...set].filter(Boolean);
 }
 
 export function allowedOrigins() {
@@ -180,31 +202,45 @@ export async function touchDevice(userId) {
 }
 
 export async function lookupPhone(phone) {
+  const candidates = phoneCandidates(phone);
+  if (!candidates.length) return null;
+
   if (await ensureSchema()) {
     const { rows } = await pool().query(
-      'SELECT user_id AS "userId", name, last_seen AS "lastSeen" FROM devices WHERE phone=$1 LIMIT 1',
-      [phone],
+      `SELECT user_id AS "userId", name, phone, last_seen AS "lastSeen"
+       FROM devices WHERE phone = ANY($1::text[]) LIMIT 1`,
+      [candidates],
     );
     return rows[0] || null;
   }
-  const record = memory.byPhone.get(phone);
-  return record ? { userId: record.userId, name: record.name, lastSeen: record.lastSeen } : null;
+  for (const c of candidates) {
+    const record = memory.byPhone.get(c);
+    if (record) {
+      return { userId: record.userId, name: record.name, phone: record.phone, lastSeen: record.lastSeen };
+    }
+  }
+  return null;
 }
 
 export async function lookupFirebaseUserByPhone(phone) {
   const firebase = getFirebaseAdmin();
   if (!firebase) return null;
-  try {
-    const user = await admin.auth(firebase).getUserByPhoneNumber(phone);
-    return {
-      userId: user.uid,
-      name: user.displayName || user.phoneNumber || phone,
-      lastSeen: user.metadata?.lastSignInTime || user.metadata?.creationTime || null,
-    };
-  } catch (error) {
-    if (error?.code === 'auth/user-not-found') return null;
-    throw error;
+  const candidates = phoneCandidates(phone).filter((c) => c.startsWith('+'));
+  for (const candidate of candidates) {
+    try {
+      const user = await admin.auth(firebase).getUserByPhoneNumber(candidate);
+      return {
+        userId: user.uid,
+        name: user.displayName || user.phoneNumber || candidate,
+        phone: user.phoneNumber || candidate,
+        lastSeen: user.metadata?.lastSignInTime || user.metadata?.creationTime || null,
+      };
+    } catch (error) {
+      if (error?.code === 'auth/user-not-found') continue;
+      throw error;
+    }
   }
+  return null;
 }
 
 export async function deviceExists(userId) {
@@ -318,7 +354,6 @@ export function fail(res, error) {
   log('error', 'request_failed', {
     name: error?.name || 'Error',
     code: error?.code,
-    // Pas de stack ni message SQL brut en réponse client
   });
   return res.status(500).json({ error: 'Internal server error' });
 }
