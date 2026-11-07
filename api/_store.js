@@ -34,7 +34,26 @@ export function firebaseAuthMode() {
 }
 let schemaPromise;
 
-export class StorageUnavailable extends Error {}
+export class StorageUnavailable extends Error {
+  constructor(message = 'Storage unavailable') {
+    super(message);
+    this.name = 'StorageUnavailable';
+  }
+}
+
+/** Log JSON une ligne — lisible dans Render / Vercel. */
+export function log(level, event, fields = {}) {
+  const line = JSON.stringify({
+    ts: new Date().toISOString(),
+    level,
+    service: 'upchat-signal',
+    event,
+    ...fields,
+  });
+  if (level === 'error') console.error(line);
+  else if (level === 'warn') console.warn(line);
+  else console.log(line);
+}
 
 function pool() {
   if (globalThis.__upchatPool) return globalThis.__upchatPool;
@@ -46,6 +65,9 @@ function pool() {
     idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 8_000,
   });
+  globalThis.__upchatPool.on('error', (err) => {
+    log('error', 'pg_pool_error', { name: err?.name, code: err?.code });
+  });
   return globalThis.__upchatPool;
 }
 
@@ -53,7 +75,7 @@ export async function ensureSchema() {
   const db = pool();
   if (!db) {
     if (process.env.UPCHAT_ALLOW_MEMORY_STORE === 'true') return false;
-    throw new StorageUnavailable();
+    throw new StorageUnavailable('DATABASE_URL missing and memory store disabled');
   }
   if (!schemaPromise) {
     schemaPromise = db.query(`
@@ -70,7 +92,11 @@ export async function ensureSchema() {
         envelope JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), delivered_at TIMESTAMPTZ
       );
       CREATE INDEX IF NOT EXISTS messages_target_idx ON messages(target_user_id, created_at, message_id);
-    `).catch((error) => { schemaPromise = undefined; throw error; });
+    `).catch((error) => {
+      schemaPromise = undefined;
+      log('error', 'schema_init_failed', { name: error?.name, code: error?.code });
+      throw error;
+    });
   }
   await schemaPromise;
   return true;
@@ -259,16 +285,24 @@ export function cors(req, res) {
 export async function guard(req, res, key) {
   cors(req, res);
   if (req.method === 'OPTIONS') { res.status(204).end(); return false; }
-  if (!rateLimit(req, key)) { res.status(429).json({ error: 'Too many requests' }); return false; }
+  if (!rateLimit(req, key)) {
+    log('warn', 'rate_limited', { route: key });
+    res.status(429).json({ error: 'Too many requests' });
+    return false;
+  }
   const token = bearer(req);
-  if (token.length < 32) { res.status(401).json({ error: 'Unauthorized' }); return false; }
+  if (token.length < 32) {
+    log('warn', 'unauthorized_short_token', { route: key });
+    res.status(401).json({ error: 'Unauthorized' });
+    return false;
+  }
   const firebase = getFirebaseAdmin();
   if (firebase) {
     try {
       const decoded = await admin.auth(firebase).verifyIdToken(token);
       return { token, tokenHash: hashSecret(token), firebase: true, uid: decoded.uid, claims: decoded };
     } catch (error) {
-      console.warn('Firebase ID token rejected', error?.code || error?.name || 'Error');
+      log('warn', 'firebase_token_rejected', { code: error?.code || error?.name });
       res.status(401).json({ error: 'Unauthorized' });
       return false;
     }
@@ -277,7 +311,14 @@ export async function guard(req, res, key) {
 }
 
 export function fail(res, error) {
-  if (error instanceof StorageUnavailable) return res.status(503).json({ error: 'Service temporarily unavailable' });
-  console.error('upchat-signal request failed', error?.name || 'Error');
+  if (error instanceof StorageUnavailable) {
+    log('error', 'storage_unavailable', { message: error.message });
+    return res.status(503).json({ error: 'Service temporarily unavailable' });
+  }
+  log('error', 'request_failed', {
+    name: error?.name || 'Error',
+    code: error?.code,
+    // Pas de stack ni message SQL brut en réponse client
+  });
   return res.status(500).json({ error: 'Internal server error' });
 }

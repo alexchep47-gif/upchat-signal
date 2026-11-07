@@ -5,6 +5,7 @@ import presence from './api/presence.js';
 import message from './api/message.js';
 import inbox from './api/inbox.js';
 import health from './api/health.js';
+import { log } from './api/_store.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -17,16 +18,38 @@ app.use((_, res, next) => {
 });
 app.use(express.json({ limit: '300kb' }));
 
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    // Éviter de spammer les health checks trop verbeux : log seulement si lent ou erreur
+    const ms = Date.now() - start;
+    if (req.path === '/api/health' && res.statusCode < 400 && ms < 500) return;
+    log('info', 'http', {
+      method: req.method,
+      path: req.path,
+      status: res.statusCode,
+      ms,
+    });
+  });
+  next();
+});
+
 app.all('/api/register', register);
 app.all('/api/lookup', lookup);
 app.all('/api/presence', presence);
 app.all('/api/message', message);
 app.all('/api/inbox', inbox);
 app.all('/api/health', health);
+// Alias fréquent Render/load balancer
+app.get('/health', health);
 
-app.use((_, res) => res.status(404).json({ error: 'Not found' }));
+app.use((req, res) => {
+  log('warn', 'not_found', { method: req.method, path: req.path });
+  res.status(404).json({ error: 'Not found' });
+});
 app.use((error, _, res, next) => {
   if (error?.type === 'entity.parse.failed' || error instanceof SyntaxError) {
+    log('warn', 'invalid_json');
     return res.status(400).json({ error: 'Invalid JSON body' });
   }
   return next(error);
@@ -34,5 +57,10 @@ app.use((error, _, res, next) => {
 
 const port = Number(process.env.PORT || 3000);
 app.listen(port, '0.0.0.0', () => {
-  console.log(`upchat-signal listening on ${port}`);
+  log('info', 'listening', {
+    port,
+    node: process.version,
+    hasDatabase: Boolean(process.env.DATABASE_URL),
+    memoryStore: process.env.UPCHAT_ALLOW_MEMORY_STORE === 'true',
+  });
 });
