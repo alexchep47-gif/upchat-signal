@@ -40,6 +40,8 @@ app.all('/api/presence', presence);
 app.all('/api/message', message);
 app.all('/api/inbox', inbox);
 app.all('/api/health', health);
+// Public probe kept for Render and older clients.
+app.all('/health', health);
 // Alias fréquent Render/load balancer
 app.get('/health', health);
 
