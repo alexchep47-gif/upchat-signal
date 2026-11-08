@@ -18,6 +18,12 @@ export default async function handler(req, res) {
     }
     const normalized = phone ? normalizePhone(phone) : null;
     if (phone && !normalized) return res.status(400).json({ error: 'Invalid phone' });
+    if (auth.firebase && normalized) {
+      const verifiedPhone = normalizePhone(auth.claims?.phone_number || '');
+      if (!verifiedPhone || verifiedPhone !== normalized) {
+        return res.status(403).json({ error: 'Phone number is not verified by Firebase' });
+      }
+    }
     const record = await registerDevice({
       userId,
       name: cleanText(name || 'Utilisateur', 80) || 'Utilisateur',
