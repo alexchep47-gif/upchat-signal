@@ -32,6 +32,21 @@ function getFirebaseAdmin() {
 export function firebaseAuthMode() {
   return firebaseAdminEnabled() ? 'firebase-admin' : 'legacy-device-token';
 }
+
+export async function authenticateRelayToken(token) {
+  if (typeof token !== 'string' || token.length < 32) return null;
+  const firebase = getFirebaseAdmin();
+  if (firebase) {
+    try {
+      const decoded = await admin.auth(firebase).verifyIdToken(token);
+      return { userId: decoded.uid, firebase: true };
+    } catch (_) {
+      return null;
+    }
+  }
+  const device = await findDeviceByToken(hashSecret(token));
+  return device ? { userId: device.userId, firebase: false } : null;
+}
 let schemaPromise;
 
 export class StorageUnavailable extends Error {
